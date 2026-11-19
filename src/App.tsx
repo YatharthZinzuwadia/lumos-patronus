@@ -43,7 +43,7 @@ function App() {
 
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState("Camera stopped");
-  const [gestureLabel, setGestureLabel] = useState("NO HAND");
+  // const [gestureLabel, setGestureLabel] = useState("NO HAND");
 
   async function startCamera() {
     try {
@@ -121,7 +121,7 @@ function App() {
       let lastHudUpdate = 0;
 
       setRunning(true);
-      setGestureLabel("NO HAND");
+      // setGestureLabel("NO HAND");
       setStatus("Camera active. Show your hands.");
 
       function render() {
@@ -170,7 +170,7 @@ function App() {
           if (label !== lastGestureLabel && now - lastHudUpdate >= 100) {
             lastGestureLabel = label;
             lastHudUpdate = now;
-            setGestureLabel(label);
+            // setGestureLabel(label);
           }
 
           const visualHands: GestureInput[] = sortedHands.map((hand) => {
@@ -255,7 +255,7 @@ function App() {
 
     setRunning(false);
     setStatus("Camera stopped");
-    setGestureLabel("NO HAND");
+    // setGestureLabel("NO HAND");
   }
 
   useEffect(() => {
