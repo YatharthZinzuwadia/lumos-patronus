@@ -126,6 +126,7 @@ function App() {
 
       function render() {
         if (
+          video &&
           video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
           video.currentTime !== lastVideoTime
         ) {
@@ -269,7 +270,7 @@ function App() {
 
       landmarkerRef.current?.close();
       vfxRef.current?.dispose();
-
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       processorRef.current.reset();
     };
   }, []);

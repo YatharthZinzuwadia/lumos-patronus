@@ -20,9 +20,9 @@ const WORLD_HEIGHT = 10;
 const MAX_TRAIL_POINTS = 55;
 const PARTICLE_COUNT = 420;
 
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value));
-}
+// function clamp(value: number, min: number, max: number) {
+//   return Math.max(min, Math.min(max, value));
+// }
 
 function createGlowTexture(): THREE.CanvasTexture {
   const canvas = document.createElement("canvas");
