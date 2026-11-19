@@ -25,6 +25,7 @@ type HandDetection = {
 
 export type HandControl = {
   id: number;
+  sourceIndex: number;
   side: string;
   gesture: GestureName;
 
@@ -42,6 +43,7 @@ export type HandControl = {
 
 type HandTrack = {
   id: number;
+  sourceIndex: number;
   side: string;
 
   lastSeen: number;
@@ -122,13 +124,10 @@ function jointAngle(a: Landmark, b: Landmark, c: Landmark): number {
 }
 
 /**
- * Calculates scale-independent hand openness.
+ * Scale-independent openness using 3D hand landmarks.
  *
- * Reference length:
- * Wrist (0) -> Middle MCP (9)
- *
- * Open fingers produce larger distances from the
- * middle MCP to fingertips.
+ * Palm reference: wrist (0) to middle MCP (9).
+ * Five fingertip distances are normalized against that reference.
  */
 function calculateOpenness(hand: Landmark[]): number {
   const palmLength = distance3D(hand[0], hand[9]) || 0.0001;
@@ -147,9 +146,8 @@ function calculateOpenness(hand: Landmark[]): number {
 }
 
 /**
- * Calculates normalized distance between thumb and index.
- *
- * Smaller ratio = tighter pinch.
+ * Normalized thumb-index distance.
+ * Smaller values indicate a tighter pinch.
  */
 function calculatePinchRatio(hand: Landmark[]): number {
   const palmLength = distance3D(hand[0], hand[9]) || 0.0001;
@@ -183,7 +181,7 @@ export class HandInputProcessor {
     handednesses: HandednessCategory[][] | undefined,
     now: number,
   ): HandControl[] {
-    // Remove expired tracks before matching new detections.
+    // Remove expired tracks, but retain brief detection dropouts.
     for (const [id, track] of this.tracks) {
       if (now - track.lastSeen > this.lostGraceMs) {
         this.tracks.delete(id);
@@ -211,12 +209,7 @@ export class HandInputProcessor {
       });
     });
 
-    /**
-     * Associate detections with existing tracks.
-     *
-     * We use both palm position and handedness.
-     * This avoids relying on MediaPipe's array ordering.
-     */
+    // Associate current detections with previously tracked hands.
     const pairs: {
       detectionIndex: number;
       trackId: number;
@@ -264,11 +257,11 @@ export class HandInputProcessor {
       if (!track) continue;
 
       assignments.set(pair.detectionIndex, track);
-
       assignedDetections.add(pair.detectionIndex);
       assignedTracks.add(pair.trackId);
     }
 
+    // Create new tracks or update existing ones.
     detections.forEach((detection, index) => {
       let track = assignments.get(index);
 
@@ -285,6 +278,7 @@ export class HandInputProcessor {
       if (!track) {
         track = {
           id: this.nextId++,
+          sourceIndex: index,
           side: detection.side,
 
           lastSeen: now,
@@ -310,6 +304,7 @@ export class HandInputProcessor {
       } else {
         this.updateTrack(
           track,
+          index,
           detection,
           openness,
           pinchRatio,
@@ -324,6 +319,7 @@ export class HandInputProcessor {
       .filter((track) => now - track.lastSeen <= this.lostGraceMs)
       .map((track) => ({
         id: track.id,
+        sourceIndex: track.sourceIndex,
         side: track.side,
         gesture: track.gesture,
 
@@ -344,6 +340,7 @@ export class HandInputProcessor {
 
   private updateTrack(
     track: HandTrack,
+    sourceIndex: number,
     detection: HandDetection,
     rawOpenness: number,
     rawPinchRatio: number,
@@ -353,7 +350,7 @@ export class HandInputProcessor {
   ) {
     const dt = clamp(now - track.lastUpdate, 0, 100);
 
-    // Delta-time-based exponential smoothing.
+    // Delta-time-based smoothing.
     const positionAlpha = 1 - Math.exp(-dt / 45);
     const metricAlpha = 1 - Math.exp(-dt / 80);
 
@@ -371,6 +368,7 @@ export class HandInputProcessor {
 
     track.pinchRatio = lerp(track.pinchRatio, rawPinchRatio, metricAlpha);
 
+    track.sourceIndex = sourceIndex;
     track.side = detection.side;
     track.lastSeen = now;
     track.lastUpdate = now;
@@ -401,7 +399,9 @@ export class HandInputProcessor {
   }
 
   private updatePinch(track: HandTrack, now: number) {
-    // Enter and release use different thresholds.
+    // TODO(LUMOS-INPUT): Revisit pinch transitions.
+    // Current hysteresis works, but activation and release still
+    // need calibration against different hands and fast movements.
     const desired = track.pinchActive
       ? track.pinchRatio < 0.36
       : track.pinchRatio < 0.23;
@@ -436,7 +436,6 @@ export class HandInputProcessor {
       return;
     }
 
-    // A new gesture must persist before it becomes active.
     if (now - track.gestureCandidateSince >= 90) {
       track.gesture = proposed;
       track.gestureCandidate = proposed;

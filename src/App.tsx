@@ -2,11 +2,31 @@ import { useEffect, useRef, useState } from "react";
 
 import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
 
-import { HandInputProcessor } from "./hand/gestureDetection";
+import { HandInputProcessor, type HandControl } from "./hand/gestureDetection";
 
-import { createHandVfx } from "./vfx/HandVfx";
+import {
+  createHandVfxStudio,
+  type GestureInput,
+  type HandPoint,
+} from "./vfx/HandVfxStudio";
 
 import "./App.css";
+
+function getVisualPoint(hand: HandControl, twoHands: boolean): HandPoint {
+  if (twoHands) {
+    return hand.palmCenter;
+  }
+
+  if (hand.gesture === "PINCH") {
+    return hand.pinchPoint;
+  }
+
+  if (hand.gesture === "OPEN PALM" || hand.gesture === "FIST") {
+    return hand.palmCenter;
+  }
+
+  return hand.indexTip;
+}
 
 function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -14,12 +34,11 @@ function App() {
 
   const landmarkerRef = useRef<HandLandmarker | null>(null);
 
-  const vfxRef = useRef<ReturnType<typeof createHandVfx> | null>(null);
+  const vfxRef = useRef<ReturnType<typeof createHandVfxStudio> | null>(null);
 
   const processorRef = useRef(new HandInputProcessor());
 
   const streamRef = useRef<MediaStream | null>(null);
-
   const frameRef = useRef<number | null>(null);
 
   const [running, setRunning] = useState(false);
@@ -36,7 +55,6 @@ function App() {
 
       let landmarker: HandLandmarker;
 
-      // GPU first, CPU fallback.
       try {
         landmarker = await HandLandmarker.createFromOptions(vision, {
           baseOptions: {
@@ -50,7 +68,10 @@ function App() {
           minTrackingConfidence: 0.55,
         });
       } catch (gpuError) {
-        console.warn("GPU unavailable. Using CPU.", gpuError);
+        console.warn(
+          "GPU initialization failed. Falling back to CPU.",
+          gpuError,
+        );
 
         landmarker = await HandLandmarker.createFromOptions(vision, {
           baseOptions: {
@@ -84,22 +105,23 @@ function App() {
       const host = vfxHostRef.current;
 
       if (!video || !host) {
-        throw new Error("Camera or graphics container not found.");
+        throw new Error("Camera element or graphics container was not found.");
       }
 
       video.srcObject = stream;
       await video.play();
 
-      // Preserve the existing 3D engine.
-      vfxRef.current = createHandVfx(host);
+      vfxRef.current = createHandVfxStudio(host, video);
 
       processorRef.current.reset();
 
       let lastVideoTime = -1;
       let lastGestureLabel = "";
       let lastStatus = "";
+      let lastHudUpdate = 0;
 
       setRunning(true);
+      setGestureLabel("NO HAND");
       setStatus("Camera active. Show your hands.");
 
       function render() {
@@ -114,25 +136,20 @@ function App() {
           const result = landmarker.detectForVideo(video, now);
 
           const detectedHands = processorRef.current.update(
-            result.landmarks,
-            result.worldLandmarks,
+            result.landmarks ?? [],
+            result.worldLandmarks ?? undefined,
             result.handednesses,
             now,
           );
 
-          /**
-           * Sort by visible screen position.
-           *
-           * The camera and VFX layers are mirrored with CSS,
-           * but the image passed into MediaPipe is not.
-           *
-           * Therefore, visible screen X = 1 - landmark X.
-           */
+          // Sort according to mirrored screen position.
           const sortedHands = [...detectedHands].sort(
             (a, b) => 1 - a.palmCenter.x - (1 - b.palmCenter.x),
           );
 
-          // Diagnostic display with useful calibration values.
+          const twoHands = sortedHands.length >= 2;
+
+          // Limit React HUD updates to avoid unnecessary rendering.
           const label =
             sortedHands.length === 0
               ? "NO HAND"
@@ -141,52 +158,43 @@ function App() {
                     const held = hand.stale ? " · HOLD" : "";
 
                     return (
-                      `${hand.side}: ${hand.gesture}` +
-                      ` [O ${hand.openness.toFixed(1)}` +
+                      `ID ${hand.id} ${hand.side}: ${hand.gesture}` +
+                      ` [O ${hand.openness.toFixed(2)}` +
                       ` / P ${hand.pinchRatio.toFixed(2)}]` +
                       held
                     );
                   })
                   .join(" | ");
 
-          if (label !== lastGestureLabel) {
+          if (label !== lastGestureLabel && now - lastHudUpdate >= 100) {
             lastGestureLabel = label;
+            lastHudUpdate = now;
             setGestureLabel(label);
           }
 
-          /**
-           * Single hand:
-           *  - Pinch follows thumb/index midpoint.
-           *  - Open/Fist follows palm center.
-           *  - Point/Neutral follows index fingertip.
-           *
-           * Two hands:
-           *  - Always follow palm centers.
-           *  - Prevents gesture-dependent position jumps.
-           */
-          const twoHands = sortedHands.length >= 2;
+          const visualHands: GestureInput[] = sortedHands.map((hand) => {
+            const currentLandmarks = hand.stale
+              ? undefined
+              : result.landmarks?.[hand.sourceIndex];
 
-          const visualHands = sortedHands.map((hand) => {
-            let point = hand.indexTip;
-
-            if (twoHands) {
-              point = hand.palmCenter;
-            } else if (hand.gesture === "PINCH") {
-              point = hand.pinchPoint;
-            } else if (
-              hand.gesture === "OPEN PALM" ||
-              hand.gesture === "FIST"
-            ) {
-              point = hand.palmCenter;
-            }
+            const fingertips = currentLandmarks
+              ? [4, 8, 12, 16, 20].map((index) => ({
+                  x: currentLandmarks[index].x,
+                  y: currentLandmarks[index].y,
+                }))
+              : [];
 
             return {
+              id: hand.id,
               side: hand.side,
               gesture: hand.gesture,
-              point,
+              point: getVisualPoint(hand, twoHands),
+
               openness: hand.openness,
               pinchStrength: hand.pinchStrength,
               pinchActive: hand.pinchActive,
+
+              fingertips,
             };
           });
 

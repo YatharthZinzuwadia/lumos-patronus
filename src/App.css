@@ -1,10 +1,13 @@
+
 .app {
   min-height: 100vh;
   padding: 40px 20px;
+
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 25px;
+
   color: #f5f5f5;
 }
 
@@ -19,20 +22,28 @@ header {
 }
 
 h1 {
-  font-size: clamp(30px, 5vw, 48px);
   margin: 10px 0;
+
+  font-size: clamp(30px, 5vw, 48px);
+  line-height: 1.1;
+  letter-spacing: -1.5px;
 }
 
 .subtitle {
   color: #999;
+  font-size: 16px;
 }
 
 .stage {
   position: relative;
+
   width: min(100%, 960px);
   aspect-ratio: 16 / 9;
+
   overflow: hidden;
+
   background: #050505;
+
   border: 1px solid #333;
   border-radius: 16px;
 }
@@ -41,56 +52,43 @@ h1 {
 .stage .vfx-layer {
   position: absolute;
   inset: 0;
+
   width: 100%;
   height: 100%;
 }
 
 .stage video {
   z-index: 0;
+
   object-fit: cover;
-  transform: scaleX(-1);
+
+  /* MediaPipe still reads this video.
+     Three.js renders the visible video texture. */
+  opacity: 0;
+  pointer-events: none;
 }
 
 .stage .vfx-layer {
   z-index: 1;
+
+  overflow: hidden;
   pointer-events: none;
+
+  /* Mirror the camera feed and all rendered effects together. */
   transform: scaleX(-1);
 }
 
 .vfx-layer canvas {
   display: block;
+
   width: 100%;
   height: 100%;
-}
-
-.controls {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-}
-
-.status {
-  color: #aaa;
-}
-
-button {
-  padding: 13px 28px;
-  border: 0;
-  border-radius: 8px;
-  background: #00bce8;
-  color: #000;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-button:hover {
-  background: #66ddff;
 }
 
 .gesture-readout {
   position: absolute;
   z-index: 2;
+
   top: 16px;
   left: 16px;
 
@@ -99,6 +97,7 @@ button:hover {
   gap: 5px;
 
   max-width: calc(100% - 32px);
+
   padding: 12px 16px;
 
   border: 1px solid rgba(100, 230, 255, 0.25);
@@ -112,12 +111,83 @@ button:hover {
 
 .gesture-readout span {
   color: #7da8b8;
+
   font-size: 10px;
   letter-spacing: 2px;
 }
 
 .gesture-readout strong {
   color: #a5f3fc;
+
+  font-size: 12px;
+  line-height: 1.5;
+  letter-spacing: 0.5px;
+
+  overflow-wrap: anywhere;
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.status {
+  color: #aaa;
   font-size: 13px;
-  letter-spacing: 1px;
+}
+
+button {
+  padding: 13px 28px;
+
+  border: 0;
+  border-radius: 8px;
+
+  background: #00bce8;
+  color: #000;
+
+  font-size: 14px;
+  font-weight: 700;
+
+  cursor: pointer;
+
+  transition:
+    background 150ms ease,
+    transform 150ms ease;
+}
+
+button:hover {
+  background: #66ddff;
+  transform: translateY(-1px);
+}
+
+button:active {
+  transform: translateY(0);
+}
+
+button:focus-visible {
+  outline: 2px solid #a5f3fc;
+  outline-offset: 3px;
+}
+
+@media (max-width: 600px) {
+  .app {
+    padding: 24px 12px;
+    gap: 20px;
+  }
+
+  .stage {
+    border-radius: 12px;
+  }
+
+  .gesture-readout {
+    top: 9px;
+    left: 9px;
+    padding: 9px 11px;
+  }
+
+  .gesture-readout strong {
+    font-size: 10px;
+  }
 }
