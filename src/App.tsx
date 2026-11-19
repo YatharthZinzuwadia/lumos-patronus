@@ -280,7 +280,9 @@ function App() {
       <header>
         <p className="eyebrow">LUMOS / PATRONUS</p>
         <h1>MAGIC IRL</h1>
-        <p className="subtitle">Move your index finger and paint with light.</p>
+        <p className="subtitle">
+          Heres a small lil surprise for my cute lil wizard
+        </p>
       </header>
 
       <section className="stage">
@@ -288,10 +290,10 @@ function App() {
 
         <div ref={vfxHostRef} className="vfx-layer" />
 
-        <div className="gesture-readout">
+        {/* <div className="gesture-readout">
           <span>LIVE GESTURE INPUT</span>
           <strong>{gestureLabel}</strong>
-        </div>
+        </div> */}
       </section>
 
       <section className="controls">
