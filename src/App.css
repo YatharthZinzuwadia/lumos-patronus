@@ -1,0 +1,78 @@
+
+.app {
+  min-height: 100vh;
+  padding: 40px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 25px;
+  color: #f5f5f5;
+}
+
+header {
+  width: min(100%, 1000px);
+}
+
+.eyebrow {
+  color: #00c8ff;
+  font-size: 12px;
+  letter-spacing: 3px;
+}
+
+h1 {
+  font-size: clamp(30px, 5vw, 48px);
+  margin: 10px 0;
+}
+
+.subtitle {
+  color: #999;
+}
+
+.stage {
+  position: relative;
+  width: min(100%, 960px);
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: #050505;
+  border: 1px solid #333;
+  border-radius: 16px;
+}
+
+.stage video,
+.stage canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+
+.stage canvas {
+  pointer-events: none;
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.status {
+  color: #aaa;
+}
+
+button {
+  padding: 13px 28px;
+  border: 0;
+  border-radius: 8px;
+  background: #00bce8;
+  color: #000;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #66ddff;
+}
