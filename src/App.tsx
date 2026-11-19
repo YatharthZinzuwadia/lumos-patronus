@@ -1,54 +1,73 @@
 import { useEffect, useRef, useState } from "react";
+
 import { FilesetResolver, HandLandmarker } from "@mediapipe/tasks-vision";
+
+import { HandInputProcessor } from "./hand/gestureDetection";
+
+import { createHandVfx } from "./vfx/HandVfx";
+
 import "./App.css";
 
 function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const vfxHostRef = useRef<HTMLDivElement>(null);
 
-  const detectorRef = useRef<HandLandmarker | null>(null);
+  const landmarkerRef = useRef<HandLandmarker | null>(null);
+
+  const vfxRef = useRef<ReturnType<typeof createHandVfx> | null>(null);
+
+  const processorRef = useRef(new HandInputProcessor());
+
   const streamRef = useRef<MediaStream | null>(null);
-  const frameRef = useRef<number | null>(null);
 
-  const trailRef = useRef<{ x: number; y: number }[]>([]);
+  const frameRef = useRef<number | null>(null);
 
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState("Camera stopped");
+  const [gestureLabel, setGestureLabel] = useState("NO HAND");
 
   async function startCamera() {
     try {
-      setStatus("Loading MediaPipe model...");
+      setStatus("Loading hand tracking...");
 
       const vision = await FilesetResolver.forVisionTasks(
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm",
       );
 
-      let detector: HandLandmarker;
+      let landmarker: HandLandmarker;
 
-      // Try GPU acceleration first, then CPU if unavailable.
+      // GPU first, CPU fallback.
       try {
-        detector = await HandLandmarker.createFromOptions(vision, {
+        landmarker = await HandLandmarker.createFromOptions(vision, {
           baseOptions: {
             modelAssetPath: "/models/hand_landmarker.task",
             delegate: "GPU",
           },
           runningMode: "VIDEO",
           numHands: 2,
+          minHandDetectionConfidence: 0.55,
+          minHandPresenceConfidence: 0.55,
+          minTrackingConfidence: 0.55,
         });
-      } catch {
-        detector = await HandLandmarker.createFromOptions(vision, {
+      } catch (gpuError) {
+        console.warn("GPU unavailable. Using CPU.", gpuError);
+
+        landmarker = await HandLandmarker.createFromOptions(vision, {
           baseOptions: {
             modelAssetPath: "/models/hand_landmarker.task",
             delegate: "CPU",
           },
           runningMode: "VIDEO",
           numHands: 2,
+          minHandDetectionConfidence: 0.55,
+          minHandPresenceConfidence: 0.55,
+          minTrackingConfidence: 0.55,
         });
       }
 
-      detectorRef.current = detector;
+      landmarkerRef.current = landmarker;
 
-      setStatus("Opening webcam...");
+      setStatus("Opening camera...");
 
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -62,31 +81,26 @@ function App() {
       streamRef.current = stream;
 
       const video = videoRef.current;
-      const canvas = canvasRef.current;
+      const host = vfxHostRef.current;
 
-      if (!video || !canvas) {
-        throw new Error("Video or canvas element not found.");
+      if (!video || !host) {
+        throw new Error("Camera or graphics container not found.");
       }
 
       video.srcObject = stream;
       await video.play();
 
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
+      // Preserve the existing 3D engine.
+      vfxRef.current = createHandVfx(host);
 
-      const ctx = canvas.getContext("2d");
-
-      if (!ctx) {
-        throw new Error("Could not create canvas context.");
-      }
-
-      trailRef.current = [];
+      processorRef.current.reset();
 
       let lastVideoTime = -1;
-      let hasDetectedHand = false;
+      let lastGestureLabel = "";
+      let lastStatus = "";
 
       setRunning(true);
-      setStatus("Show your hand to the camera.");
+      setStatus("Camera active. Show your hands.");
 
       function render() {
         if (
@@ -95,90 +109,112 @@ function App() {
         ) {
           lastVideoTime = video.currentTime;
 
-          const result = detector.detectForVideo(video, performance.now());
+          const now = performance.now();
 
-          const hand = result.landmarks?.[0];
+          const result = landmarker.detectForVideo(video, now);
 
-          if (hand) {
-            // Landmark 8 = index fingertip.
-            const fingertip = hand[8];
+          const detectedHands = processorRef.current.update(
+            result.landmarks,
+            result.worldLandmarks,
+            result.handednesses,
+            now,
+          );
 
-            trailRef.current.push({
-              x: fingertip.x * canvas.width,
-              y: fingertip.y * canvas.height,
-            });
+          /**
+           * Sort by visible screen position.
+           *
+           * The camera and VFX layers are mirrored with CSS,
+           * but the image passed into MediaPipe is not.
+           *
+           * Therefore, visible screen X = 1 - landmark X.
+           */
+          const sortedHands = [...detectedHands].sort(
+            (a, b) => 1 - a.palmCenter.x - (1 - b.palmCenter.x),
+          );
 
-            if (trailRef.current.length > 45) {
-              trailRef.current.shift();
+          // Diagnostic display with useful calibration values.
+          const label =
+            sortedHands.length === 0
+              ? "NO HAND"
+              : sortedHands
+                  .map((hand) => {
+                    const held = hand.stale ? " · HOLD" : "";
+
+                    return (
+                      `${hand.side}: ${hand.gesture}` +
+                      ` [O ${hand.openness.toFixed(1)}` +
+                      ` / P ${hand.pinchRatio.toFixed(2)}]` +
+                      held
+                    );
+                  })
+                  .join(" | ");
+
+          if (label !== lastGestureLabel) {
+            lastGestureLabel = label;
+            setGestureLabel(label);
+          }
+
+          /**
+           * Single hand:
+           *  - Pinch follows thumb/index midpoint.
+           *  - Open/Fist follows palm center.
+           *  - Point/Neutral follows index fingertip.
+           *
+           * Two hands:
+           *  - Always follow palm centers.
+           *  - Prevents gesture-dependent position jumps.
+           */
+          const twoHands = sortedHands.length >= 2;
+
+          const visualHands = sortedHands.map((hand) => {
+            let point = hand.indexTip;
+
+            if (twoHands) {
+              point = hand.palmCenter;
+            } else if (hand.gesture === "PINCH") {
+              point = hand.pinchPoint;
+            } else if (
+              hand.gesture === "OPEN PALM" ||
+              hand.gesture === "FIST"
+            ) {
+              point = hand.palmCenter;
             }
 
-            if (!hasDetectedHand) {
-              setStatus("Tracking active!");
-              hasDetectedHand = true;
-            }
-          } else {
-            trailRef.current.shift();
+            return {
+              side: hand.side,
+              gesture: hand.gesture,
+              point,
+              openness: hand.openness,
+              pinchStrength: hand.pinchStrength,
+              pinchActive: hand.pinchActive,
+            };
+          });
+
+          vfxRef.current?.updateHands(visualHands);
+
+          const nextStatus = detectedHands.some((hand) => !hand.stale)
+            ? "Hand tracking active."
+            : detectedHands.length > 0
+              ? "Holding recent hand position."
+              : "Camera active. Show your hands.";
+
+          if (nextStatus !== lastStatus) {
+            lastStatus = nextStatus;
+            setStatus(nextStatus);
           }
         }
-
-        // Fade previous frames to create a trailing effect.
-        ctx.globalCompositeOperation = "destination-out";
-        ctx.fillStyle = "rgba(0, 0, 0, 0.10)";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        ctx.globalCompositeOperation = "lighter";
-
-        const points = trailRef.current;
-
-        if (points.length > 1) {
-          ctx.beginPath();
-          ctx.moveTo(points[0].x, points[0].y);
-
-          for (let i = 1; i < points.length; i++) {
-            ctx.lineTo(points[i].x, points[i].y);
-          }
-
-          // Outer glow.
-          ctx.lineWidth = 12;
-          ctx.lineCap = "round";
-          ctx.lineJoin = "round";
-          ctx.strokeStyle = "rgba(0, 190, 255, 0.85)";
-          ctx.shadowColor = "#00c8ff";
-          ctx.shadowBlur = 28;
-          ctx.stroke();
-
-          // Bright inner line.
-          ctx.shadowBlur = 5;
-          ctx.lineWidth = 2.5;
-          ctx.strokeStyle = "#ffffff";
-          ctx.stroke();
-
-          ctx.shadowBlur = 0;
-        }
-
-        // Draw a glowing dot at the latest fingertip position.
-        if (points.length > 0) {
-          const last = points[points.length - 1];
-
-          ctx.beginPath();
-          ctx.arc(last.x, last.y, 7, 0, Math.PI * 2);
-          ctx.fillStyle = "#ffffff";
-          ctx.shadowColor = "#00c8ff";
-          ctx.shadowBlur = 30;
-          ctx.fill();
-          ctx.shadowBlur = 0;
-        }
-
-        ctx.globalCompositeOperation = "source-over";
 
         frameRef.current = requestAnimationFrame(render);
       }
 
       render();
     } catch (error) {
-      console.error(error);
+      console.error("Startup error:", error);
+
+      stopCamera();
+
       setStatus(
-        error instanceof Error ? error.message : "Something went wrong.",
+        error instanceof Error ? error.message : "Unable to start camera.",
       );
     }
   }
@@ -189,28 +225,28 @@ function App() {
       frameRef.current = null;
     }
 
-    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current?.getTracks().forEach((track) => {
+      track.stop();
+    });
+
     streamRef.current = null;
 
-    detectorRef.current?.close();
-    detectorRef.current = null;
+    landmarkerRef.current?.close();
+    landmarkerRef.current = null;
+
+    vfxRef.current?.dispose();
+    vfxRef.current = null;
+
+    processorRef.current.reset();
 
     if (videoRef.current) {
       videoRef.current.pause();
       videoRef.current.srcObject = null;
     }
 
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-
-    if (canvas && ctx) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-    }
-
-    trailRef.current = [];
-
     setRunning(false);
     setStatus("Camera stopped");
+    setGestureLabel("NO HAND");
   }
 
   useEffect(() => {
@@ -219,8 +255,14 @@ function App() {
         cancelAnimationFrame(frameRef.current);
       }
 
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      detectorRef.current?.close();
+      streamRef.current?.getTracks().forEach((track) => {
+        track.stop();
+      });
+
+      landmarkerRef.current?.close();
+      vfxRef.current?.dispose();
+
+      processorRef.current.reset();
     };
   }, []);
 
@@ -234,7 +276,13 @@ function App() {
 
       <section className="stage">
         <video ref={videoRef} muted playsInline />
-        <canvas ref={canvasRef} />
+
+        <div ref={vfxHostRef} className="vfx-layer" />
+
+        <div className="gesture-readout">
+          <span>LIVE GESTURE INPUT</span>
+          <strong>{gestureLabel}</strong>
+        </div>
       </section>
 
       <section className="controls">

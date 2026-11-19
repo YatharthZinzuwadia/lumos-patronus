@@ -1,0 +1,345 @@
+import * as THREE from "three";
+
+export type HandPoint = {
+  x: number;
+  y: number;
+};
+
+const WORLD_HEIGHT = 10;
+const MAX_TRAIL_POINTS = 55;
+const PARTICLE_COUNT = 420;
+
+function createGlowTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 128;
+
+  const ctx = canvas.getContext("2d");
+
+  if (!ctx) {
+    throw new Error("Unable to create glow texture.");
+  }
+
+  const gradient = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+
+  gradient.addColorStop(0, "rgba(255,255,255,1)");
+  gradient.addColorStop(0.15, "rgba(100,240,255,0.9)");
+  gradient.addColorStop(0.4, "rgba(0,180,255,0.35)");
+  gradient.addColorStop(1, "rgba(0,150,255,0)");
+
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, 128, 128);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+
+  return texture;
+}
+
+export function createHandVfx(host: HTMLDivElement) {
+  const scene = new THREE.Scene();
+
+  const renderer = new THREE.WebGLRenderer({
+    alpha: true,
+    antialias: true,
+    powerPreference: "high-performance",
+  });
+
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+  renderer.setClearColor(0x000000, 0);
+
+  host.appendChild(renderer.domElement);
+
+  const camera = new THREE.OrthographicCamera(-5, 5, 5, -5, 0.1, 100);
+
+  camera.position.set(0, 0, 10);
+
+  function resize() {
+    const width = Math.max(host.clientWidth, 1);
+    const height = Math.max(host.clientHeight, 1);
+
+    const aspect = width / height;
+
+    camera.left = -(WORLD_HEIGHT * aspect) / 2;
+    camera.right = (WORLD_HEIGHT * aspect) / 2;
+    camera.top = WORLD_HEIGHT / 2;
+    camera.bottom = -WORLD_HEIGHT / 2;
+
+    camera.updateProjectionMatrix();
+
+    renderer.setSize(width, height, false);
+  }
+
+  const resizeObserver = new ResizeObserver(resize);
+  resizeObserver.observe(host);
+
+  resize();
+
+  // Main group follows the detected fingertip.
+  const handGroup = new THREE.Group();
+  scene.add(handGroup);
+
+  // Large atmospheric glow.
+  const glowTexture = createGlowTexture();
+
+  const glow = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: glowTexture,
+      color: 0x00caff,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }),
+  );
+
+  glow.scale.set(2, 2, 1);
+  glow.position.z = -0.3;
+
+  handGroup.add(glow);
+
+  // Outer transparent energy sphere.
+  const halo = new THREE.Mesh(
+    new THREE.SphereGeometry(0.43, 32, 32),
+    new THREE.MeshBasicMaterial({
+      color: 0x00bfff,
+      transparent: true,
+      opacity: 0.13,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }),
+  );
+
+  handGroup.add(halo);
+
+  // Bright inner core.
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(0.13, 24, 24),
+    new THREE.MeshBasicMaterial({
+      color: 0xcaffff,
+    }),
+  );
+
+  handGroup.add(core);
+
+  // Rotating geometric structure.
+  const wireframe = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(0.29, 1),
+    new THREE.MeshBasicMaterial({
+      color: 0x65edff,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.9,
+    }),
+  );
+
+  handGroup.add(wireframe);
+
+  // Three-dimensional orbital rings.
+  const ringMaterial = new THREE.MeshBasicMaterial({
+    color: 0x16dfff,
+    transparent: true,
+    opacity: 0.8,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+
+  const ring1 = new THREE.Mesh(
+    new THREE.TorusGeometry(0.43, 0.012, 8, 80),
+    ringMaterial,
+  );
+
+  const ring2 = new THREE.Mesh(
+    new THREE.TorusGeometry(0.52, 0.009, 8, 80),
+    new THREE.MeshBasicMaterial({
+      color: 0x8ffaff,
+      transparent: true,
+      opacity: 0.6,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }),
+  );
+
+  ring1.rotation.x = 0.7;
+  ring2.rotation.y = 1.1;
+
+  handGroup.add(ring1, ring2);
+
+  // Particle cloud surrounding the energy core.
+  const particlePositions = new Float32Array(PARTICLE_COUNT * 3);
+
+  const particleGeometry = new THREE.BufferGeometry();
+
+  particleGeometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(particlePositions, 3),
+  );
+
+  const particleMaterial = new THREE.PointsMaterial({
+    color: 0x74ecff,
+    size: 4,
+    sizeAttenuation: false,
+    transparent: true,
+    opacity: 0.9,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+
+  const particles = new THREE.Points(particleGeometry, particleMaterial);
+
+  handGroup.add(particles);
+
+  // Movement trail.
+  const trailPositions = new Float32Array(MAX_TRAIL_POINTS * 3);
+
+  const trailGeometry = new THREE.BufferGeometry();
+
+  trailGeometry.setAttribute(
+    "position",
+    new THREE.BufferAttribute(trailPositions, 3).setUsage(
+      THREE.DynamicDrawUsage,
+    ),
+  );
+
+  trailGeometry.setDrawRange(0, 0);
+
+  const trail = new THREE.Line(
+    trailGeometry,
+    new THREE.LineBasicMaterial({
+      color: 0x32dfff,
+      transparent: true,
+      opacity: 0.7,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }),
+  );
+
+  trail.frustumCulled = false;
+
+  scene.add(trail);
+
+  const history: THREE.Vector3[] = [];
+
+  let hasHand = false;
+
+  // Called by MediaPipe whenever a hand position is available.
+  function updateHand(point: HandPoint | null) {
+    if (!point) {
+      handGroup.visible = false;
+      trail.visible = false;
+
+      history.length = 0;
+      trailGeometry.setDrawRange(0, 0);
+
+      hasHand = false;
+      return;
+    }
+
+    const width =
+      WORLD_HEIGHT * (host.clientWidth / Math.max(host.clientHeight, 1));
+
+    const x = (point.x - 0.5) * width;
+    const y = (0.5 - point.y) * WORLD_HEIGHT;
+
+    const target = new THREE.Vector3(x, y, 0);
+
+    if (!hasHand) {
+      handGroup.position.copy(target);
+    } else {
+      handGroup.position.lerp(target, 0.35);
+    }
+
+    hasHand = true;
+    handGroup.visible = true;
+
+    // Record the path for the trail.
+    history.push(new THREE.Vector3(x, y, 0.05));
+
+    if (history.length > MAX_TRAIL_POINTS) {
+      history.shift();
+    }
+
+    const attribute = trailGeometry.getAttribute(
+      "position",
+    ) as THREE.BufferAttribute;
+
+    history.forEach((position, index) => {
+      attribute.setXYZ(index, position.x, position.y, position.z);
+    });
+
+    attribute.needsUpdate = true;
+
+    trailGeometry.setDrawRange(0, history.length);
+
+    trail.visible = true;
+  }
+
+  // Independent animation loop for the 3D scene.
+  renderer.setAnimationLoop((time) => {
+    const t = time * 0.001;
+
+    wireframe.rotation.x = t * 0.5;
+    wireframe.rotation.y = t * 0.8;
+
+    ring1.rotation.z = t * 0.8;
+    ring2.rotation.x = t * 0.5;
+    ring2.rotation.z = -t * 0.4;
+
+    particles.rotation.y = t * 0.2;
+
+    const pulse = 1 + Math.sin(t * 2.5) * 0.055;
+
+    glow.scale.setScalar(2 * pulse);
+    handGroup.scale.setScalar(pulse);
+
+    // Continuously animate the particles around the orb.
+    const attribute = particleGeometry.getAttribute(
+      "position",
+    ) as THREE.BufferAttribute;
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const angle = i * 2.399 + t * 0.75;
+
+      const radius = 0.2 + (i % 8) * 0.035 + Math.sin(t * 2 + i * 0.1) * 0.035;
+
+      const px = Math.cos(angle) * radius;
+      const py = Math.sin(angle * 1.15) * radius * 0.75;
+      const pz = Math.sin(angle * 0.7 + t) * 0.18;
+
+      attribute.setXYZ(i, px, py, pz);
+    }
+
+    attribute.needsUpdate = true;
+
+    renderer.render(scene, camera);
+  });
+
+  function dispose() {
+    renderer.setAnimationLoop(null);
+    resizeObserver.disconnect();
+
+    scene.traverse((object) => {
+      const item = object as THREE.Object3D & {
+        geometry?: THREE.BufferGeometry;
+        material?: THREE.Material | THREE.Material[];
+      };
+
+      item.geometry?.dispose();
+
+      if (Array.isArray(item.material)) {
+        item.material.forEach((material) => material.dispose());
+      } else {
+        item.material?.dispose();
+      }
+    });
+
+    glowTexture.dispose();
+    renderer.dispose();
+    renderer.domElement.remove();
+  }
+
+  return {
+    updateHand,
+    dispose,
+  };
+}
